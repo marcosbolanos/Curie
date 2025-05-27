@@ -1,0 +1,32 @@
+[build-system]
+requires = ["flit_core >=3.2,<4"]
+build-backend = "flit_core.buildapi"
+
+[project]
+name = "1_sli_algo_benchmark"
+version = "0.0.1"
+description = "A framework for benchmarking algorithms used to predict synthetic lethality"
+authors = [
+  { name = "Marcos Bola\u00f1os" },
+]
+license = { file = "LICENSE" }
+readme = "README.md"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License"
+]
+requires-python = "==3.13.3"
+
+
+[tool.ruff]
+line-length = 99
+src = ["1_sli_algo_benchmark"]
+include = ["pyproject.toml", "1_sli_algo_benchmark/**/*.py"]
+
+[tool.ruff.lint]
+extend-select = ["I"]  # Add import sorting
+
+[tool.ruff.lint.isort]
+known-first-party = ["1_sli_algo_benchmark"]
+force-sort-within-sections = true
+
