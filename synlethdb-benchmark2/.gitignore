@@ -1,4 +1,7 @@
-*.csv
+/*.csv
+/inputs/*.csv
+/outputs/*.csv
+/cell lines/inputs/*.csv
 *.tsv
 *.xlsx
 *.png
