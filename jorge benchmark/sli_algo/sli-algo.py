@@ -167,18 +167,18 @@ def run_crispr_database(mutants_to_include, ko_genes_to_include, low_percentile,
     # Convert the list of tuples into a DataFrame
     mutant_gene_pairs_df = pd.DataFrame(mutant_gene_pairs, columns=["mutant", "gene", "low_percentile", "high_percentile"])
 
+    rows = mutant_gene_pairs_df.to_dict('records')
+
     # Single-threaded execution
     if threads == 1:
-        results = mutant_gene_pairs_df.apply(
-            lambda row: run_hypothesis_test_unique_percentiles(
-                row["mutant"], row["gene"], low_percentile, high_percentile
-            ), axis=1
-        )
-        results_df = results.apply(pd.Series)
+
+        results_list = map(process_row, rows)
+
+        # Convert the list of results to a DataFrame
+        results_df = pd.DataFrame(results_list)
     
     elif threads > 1:
         # Convert DataFrame to list of dictionaries for multiprocessing
-        rows = mutant_gene_pairs_df.to_dict('records')
     
         # Create a pool of workers
         with multiprocessing.Pool(processes=threads) as pool:
@@ -209,11 +209,10 @@ ko_genes_to_include = pd.read_excel('sli-algo inputs/reactome genes list (to inc
 # We make sure that all of the genes are incuded in our dataset, otherwise, we drop it and print it out
 ko_genes_to_include = [gene for gene in ko_genes_to_include if gene in gene_groups or print("Removed:", gene)]
 
-# And this is the list of mutant genes that are to be tested
+# mutants_to_include = pd.read_csv("sli-algo inputs/unique_mutants_tested.csv", header=None)
+# mutants_to_include = mutants_to_include.iloc[:,0].to_list()
 
-mutants_to_include = ["ARID1A","ARID1B","ARID2","BAP1","CREBBP","EED","KMT2C","KMT2D","PBRM1","SETD2","SMARCA2","SMARCA4","SMARCB1"]
-
-# mutants_to_include = ["ARID1A"]
+mutants_to_include = ["ARID1A"]
 
 results_df = run_crispr_database(mutants_to_include, ko_genes_to_include, 10, 90, threads = 6)
 
