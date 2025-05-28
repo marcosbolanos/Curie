@@ -61,6 +61,7 @@ def run_hypothesis_test_unique_percentiles(mutant, gene, low_percentile, high_pe
     
     # Fetch mutant data 
     mutant_data = gene_groups.get(mutant, pd.DataFrame())
+    
     # Filter it to eliminate entries that aren't in CRISPR_data 
     mutant_data = mutant_data[mutant_data['DepMap_ID'].isin(crispr_data['DepMap_ID'])].dropna(subset=['gene_expression'])
     if mutant_data.empty:
