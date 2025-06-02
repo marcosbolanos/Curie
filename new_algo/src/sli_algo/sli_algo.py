@@ -13,10 +13,17 @@ from typing import List
 class SliProcessor:
     """Lightweight processor that contains only the computation logic"""
     
-    def __init__(self, gene_groups: dict):
+    def __init__(
+            self, 
+            gene_groups: dict
+        ):
         self.gene_groups = gene_groups
     
-    def split_populations(self, mutant_data, lower_percentile, upper_percentile):
+    def split_populations(self, 
+            mutant_data, 
+            lower_percentile, 
+            upper_percentile
+        ):
         gene_expr = mutant_data['gene_expression'].values
         low_bound = np.percentile(gene_expr, lower_percentile)
         high_bound = np.percentile(gene_expr, upper_percentile)
@@ -28,7 +35,12 @@ class SliProcessor:
         mutant_data = mutant_data.assign(population=population)
         return mutant_data.dropna(subset=['population'])
     
-    def one_sided_test(self, mutant, gene, data):
+    def one_sided_test(
+            self,
+            mutant, 
+            gene, 
+            data
+        ):
         data = data.drop_duplicates(subset=["DepMap_ID", "gene_name", "crispr_effect", "population"])
         if data.empty or data["population"].nunique() < 2:
             return None
@@ -59,7 +71,12 @@ class SliProcessor:
         }
         return result
 
-    def create_empty_result(self, mutant, gene, low, high):
+    def create_empty_result(self, 
+            mutant, 
+            gene, 
+            low, 
+            high
+        ):
         result = {
             "mutant": mutant,
             "gene": gene,
@@ -121,7 +138,10 @@ class SliProcessor:
         return result
 
 
-def _process_row_multiprocessing(filtered_data_path: str, row: dict):
+def _process_row_multiprocessing(
+        filtered_data_path: str, 
+        row: dict
+    ):
     """Module-level function for multiprocessing that loads data efficiently"""
     try:
         # Load data once per process (this gets cached by the OS)
@@ -178,7 +198,11 @@ class SliAlgo:
         return self.processor.create_empty_result(mutant, gene, low, high)
 
     # Save results to Excel file with one tab for each mutant
-    def save_results_to_excel(self, results_df, filename="sli-algo outputs/results.xlsx"):
+    def save_results_to_excel(
+            self, 
+            results_df, 
+            filename:str = "sli-algo outputs/results.xlsx"
+        ):
         # Create Excel writer
         with pd.ExcelWriter(filename, engine='openpyxl') as writer:
             # Create a sheet with all results
@@ -221,7 +245,10 @@ class SliAlgo:
         print(f"Results saved to {filename}")
 
     # Define the process_row function at module level for multiprocessing to work
-    def process_row(self, row):
+    def process_row(
+            self, 
+            row
+        ):
         try:
             return run_hypothesis_test_unique_percentiles(
                 row["mutant"], row["gene"], row["low_percentile"], row["high_percentile"]
