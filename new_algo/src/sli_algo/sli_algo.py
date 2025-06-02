@@ -1,30 +1,21 @@
 import pandas as pd
 import numpy as np
 import multiprocessing
+import functools
+import json
+import traceback
 from scipy.stats import mannwhitneyu 
 from statsmodels.stats.multitest import multipletests
+from tqdm import tqdm
+from datetime import datetime
 from typing import List
 
-class SliAlgo:
-    def __init__(
-        self, 
-        filtered_data_path:str, 
-        mutants_to_include:List[str], 
-        ko_genes_to_include:List[str]
-    ):
-        self.filtered_data_path = filtered_data_path
-        self.mutants_to_include = mutants_to_include
-        self.ko_genes_to_include = ko_genes_to_include
-
-    def load_data(self):
-        try:
-            self.filtered_data = pd.read_csv(self.filtered_data_path)
-        except FileNotFoundError:
-            raise ValueError(f"File for Final Table not found: {self.filtered_data_path}")
-        # Preprocess data into a dictionary for quick access
-        self.gene_groups = {gene: group for gene, group in self.filtered_data.groupby('gene_name')}
-
-
+class SliProcessor:
+    """Lightweight processor that contains only the computation logic"""
+    
+    def __init__(self, gene_groups: dict):
+        self.gene_groups = gene_groups
+    
     def split_populations(self, mutant_data, lower_percentile, upper_percentile):
         gene_expr = mutant_data['gene_expression'].values
         low_bound = np.percentile(gene_expr, lower_percentile)
@@ -36,7 +27,7 @@ class SliAlgo:
         population = np.where(mask_low, 'low', np.where(mask_high, 'high', None))
         mutant_data = mutant_data.assign(population=population)
         return mutant_data.dropna(subset=['population'])
-
+    
     def one_sided_test(self, mutant, gene, data):
         data = data.drop_duplicates(subset=["DepMap_ID", "gene_name", "crispr_effect", "population"])
         if data.empty or data["population"].nunique() < 2:
@@ -66,15 +57,29 @@ class SliAlgo:
             "p_value": p_value,
             "statistic": stat,
         }
+        return result
 
+    def create_empty_result(self, mutant, gene, low, high):
+        result = {
+            "mutant": mutant,
+            "gene": gene,
+            "high": 0,
+            "low": 0,
+            "p_value": np.nan,
+            "statistic": np.nan,
+            "low_percentile": low,
+            "high_percentile": high,
+            "diff_mean": 0,
+            "diff_median": 0
+        }
         return result
 
     def run_hypothesis_test_unique_percentiles(
             self, 
-            mutant:str, 
-            gene:str, 
-            low_percentile:int, 
-            high_percentile:int
+            mutant: str, 
+            gene: str, 
+            low_percentile: int, 
+            high_percentile: int
         ):
         # Fetch CRISPR data
         crispr_data = self.gene_groups[gene].dropna(subset=['crispr_effect'])
@@ -89,7 +94,7 @@ class SliAlgo:
             return self.create_empty_result(mutant, gene, low_percentile, high_percentile)
         
         # 3. Split populations
-        expression_populations = split_populations(mutant_data, low_percentile, high_percentile)
+        expression_populations = self.split_populations(mutant_data, low_percentile, high_percentile)
         if expression_populations.empty:
             return self.create_empty_result(mutant, gene, low_percentile, high_percentile)
         
@@ -105,7 +110,7 @@ class SliAlgo:
         diff_median = mean_median['median'].iloc[-1]
         
         # 6. Perform test
-        result = self.one_sided_test(mutant, crispr_population_data, gene)
+        result = self.one_sided_test(mutant, gene, crispr_population_data)
         if result is None:
             return self.create_empty_result(mutant, gene, low_percentile, high_percentile)
         
@@ -115,21 +120,62 @@ class SliAlgo:
         result['diff_median'] = diff_median
         return result
 
-    def create_empty_result(self, mutant, gene, low, high):
-        result = {
-            "mutant": [mutant],
-            "gene": [gene],
-            "high": [0],
-            "low": [0],
-            "p_value": [np.nan],
-            "statistic": [np.nan],
-            "low_percentile": [low],
-            "high_percentile": [high],
-            "diff_mean": [0],
-            "diff_median": [0]
-        }
 
-        return result
+def _process_row_multiprocessing(filtered_data_path: str, row: dict):
+    """Module-level function for multiprocessing that loads data efficiently"""
+    try:
+        # Load data once per process (this gets cached by the OS)
+        filtered_data = pd.read_csv(filtered_data_path)
+        gene_groups = {gene: group for gene, group in filtered_data.groupby('gene_name')}
+        
+        # Create processor and run computation
+        processor = SliProcessor(gene_groups)
+        return processor.run_hypothesis_test_unique_percentiles(
+            row["mutant"], row["gene"], row["low_percentile"], row["high_percentile"]
+        )
+    except Exception as e:
+        error_info = {
+            "row": row,
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+            "timestamp": datetime.now().isoformat()
+        }
+        return {"error": error_info}
+
+class SliAlgo:
+    def __init__(
+        self, 
+        filtered_data_path:str, 
+        mutants_to_include:List[str], 
+        ko_genes_to_include:List[str]
+    ):
+        self.filtered_data_path = filtered_data_path
+        self.mutants_to_include = mutants_to_include
+        self.ko_genes_to_include = ko_genes_to_include
+
+    def load_data(self):
+        try:
+            self.filtered_data = pd.read_csv(self.filtered_data_path)
+        except FileNotFoundError:
+            raise ValueError(f"File for Final Table not found: {self.filtered_data_path}")
+        # Preprocess data into a dictionary for quick access
+        self.gene_groups = {gene: group for gene, group in self.filtered_data.groupby('gene_name')}
+        # Create processor instance
+        self.processor = SliProcessor(self.gene_groups)
+
+
+    # Delegate computation methods to processo
+    def split_populations(self, mutant_data, lower_percentile, upper_percentile):
+        return self.processor.split_populations(mutant_data, lower_percentile, upper_percentile)
+
+    def one_sided_test(self, mutant, gene, data):
+        return self.processor.one_sided_test(mutant, gene, data)
+
+    def run_hypothesis_test_unique_percentiles(self, mutant: str, gene: str, low_percentile: int, high_percentile: int):
+        return self.processor.run_hypothesis_test_unique_percentiles(mutant, gene, low_percentile, high_percentile)
+
+    def create_empty_result(self, mutant, gene, low, high):
+        return self.processor.create_empty_result(mutant, gene, low, high)
 
     # Save results to Excel file with one tab for each mutant
     def save_results_to_excel(self, results_df, filename="sli-algo outputs/results.xlsx"):
@@ -176,14 +222,25 @@ class SliAlgo:
 
     # Define the process_row function at module level for multiprocessing to work
     def process_row(self, row):
-        return self.run_hypothesis_test_unique_percentiles(
-            row["mutant"], row["gene"], row["low_percentile"], row["high_percentile"]
-        )
+        try:
+            return run_hypothesis_test_unique_percentiles(
+                row["mutant"], row["gene"], row["low_percentile"], row["high_percentile"]
+            )
+        except Exception as e:
+            error_info = {
+                "row": row,
+                "error": str(e),
+                "traceback": traceback.format_exc(),
+                "timestamp": datetime.now().isoformat()
+            }
+            error_data = {"error": error_info}
+            print(error_data)
+            return (error_data)
 
     def run_crispr_database(
             self, 
-            low_percentile : int, 
-            high_percentile : int, 
+            low_percentile: int, 
+            high_percentile: int, 
             threads: int = 1
         ):  
         # Create a list of all SL pairs to be tested (excluding self-pairs)
@@ -193,34 +250,89 @@ class SliAlgo:
         
         # Convert the list of tuples into a DataFrame
         mutant_gene_pairs_df = pd.DataFrame(mutant_gene_pairs, columns=["mutant", "gene", "low_percentile", "high_percentile"])
-
         rows = mutant_gene_pairs_df.to_dict('records')
 
         # Single-threaded execution
         if threads == 1:
-
-            results_list = map(self.process_row, rows)
-
-            # Convert the list of results to a DataFrame
-            results_df = pd.DataFrame(results_list)
+            print(f"Processing {len(rows)} gene pairs with single thread...")
+            results_list = []
+            for row in tqdm(rows, desc="Processing"):
+                try:
+                    result = self.run_hypothesis_test_unique_percentiles(
+                        row["mutant"], row["gene"], row["low_percentile"], row["high_percentile"]
+                    )
+                    results_list.append(result)
+                except Exception as e:
+                    error_info = {
+                        "row": row,
+                        "error": str(e),
+                        "traceback": traceback.format_exc(),
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    results_list.append({"error": error_info})
         
         elif threads > 1:
-            # Convert DataFrame to list of dictionaries for multiprocessing
-        
-            # Create a pool of workers
-            with multiprocessing.Pool(processes=threads) as pool:
-                # Map the function to the rows
-                results_list = pool.map(self.process_row, rows)
+            print(f"Processing {len(rows)} gene pairs with {threads} threads...")
+            # Use partial function with only the data path for memory efficiency
+            process_func = functools.partial(_process_row_multiprocessing, self.filtered_data_path)
             
-            # Convert the list of results to a DataFramep
-            results_df = pd.DataFrame(results_list)
-        
+            with multiprocessing.Pool(processes=threads) as pool:
+                results_list = list(tqdm(pool.imap(process_func, rows), total=len(rows), desc="Processing"))
+
         else:
             raise ValueError("Invalid number of threads")
+        
+        # Separate successful results from errors
+        successful_results = [r for r in results_list if "error" not in r]
+        errors = [r["error"] for r in results_list if "error" in r]
+
+        # Print summary statistics
+        total_processed = len(results_list)
+        successful_count = len(successful_results)
+        error_count = len(errors)
+        
+        print(f"\nProcessing Summary:")
+        print(f"  Total processed: {total_processed}")
+        print(f"  Successful: {successful_count}")
+        print(f"  Errors: {error_count}")
+        print(f"  Success rate: {(successful_count/total_processed)*100:.2f}%")
+
+        # Log errors if any occurred
+        if errors:
+            error_filename = f"{self.filtered_data_path}_errors.json"
+            try:
+                # Try to load existing errors
+                try:
+                    with open(error_filename, 'r') as f:
+                        existing_errors = json.load(f)
+                except FileNotFoundError:
+                    existing_errors = []
+                
+                # Append new errors
+                existing_errors.extend(errors)
+                
+                # Save all errors
+                with open(error_filename, 'w') as f:
+                    json.dump(existing_errors, f, indent=2)
+                
+                print(f"Warning: {error_count} errors occurred during execution. Details saved to {error_filename}")
+                
+            except Exception as json_error:
+                print(f"Warning: Could not save errors to JSON file: {json_error}")
+                print(f"Errors that occurred: {error_count}")
+        else:
+            print("No errors occurred during processing.")
+        
+        # Convert the list of successful results to a DataFrame
+        results_df = pd.DataFrame(successful_results) if successful_results else pd.DataFrame()
 
         # Apply Benjamini-Hochberg correction to p-values
-        for mutant in self.mutants_to_include: 
+        for mutant in mutants_to_include: 
             p_values = results_df.loc[results_df['mutant'] == mutant, 'p_value'].values
+            if len(p_values) == 0:
+                results_df.loc[results_df['mutant'] == mutant, 'adjusted_p_value'] = 'NA'
+                print(f"Warning : no p-values found for mutant: {mutant}")
+                continue
             reject, corrected_p_values, _, _ = multipletests(p_values, method='fdr_bh')
             results_df.loc[results_df['mutant'] == mutant, 'adjusted_p_value'] = corrected_p_values
 
