@@ -1,0 +1,4 @@
+# Data
+data/**/*.csv filter=lfs diff=lfs merge=lfs
+data/**/*.tsv filter=lfs diff=lfs merge=lfs
+data/**/*.xlsx filter=lfs diff=lfs merge=lfs
